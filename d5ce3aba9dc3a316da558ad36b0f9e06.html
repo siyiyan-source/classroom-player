@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>课堂录音与逐字稿</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-synthesis: none;
+      --ink: #222b29;
+      --muted: #68736f;
+      --border: #e5e9e5;
+      --accent: #216d5d;
+      --accent-soft: #eaf5f0;
+      --surface: #fff;
+      --page: #f7f9f7;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-width: 260px; margin: 0; }
+    body { background: var(--page); color: var(--ink); line-height: 1.6; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+
+    .shell { width: 100%; max-width: 960px; margin: 0 auto; padding: clamp(12px, 3vw, 28px); }
+    .card { overflow: hidden; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: 0 8px 28px rgba(27, 53, 43, .05); }
+    .top { padding: clamp(16px, 3vw, 28px); border-bottom: 1px solid var(--border); }
+    .eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+    h1 { margin: 0; font-size: clamp(18px, 2.8vw, 25px); line-height: 1.4; overflow-wrap: anywhere; }
+    .subline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 6px; color: var(--muted); font-size: 13px; }
+    .time-readout { font-variant-numeric: tabular-nums; }
+    .audio-error { margin: 9px 0 0; color: #9b3f35; font-size: 13px; }
+    audio { display: block; width: 100%; height: 42px; margin-top: 17px; accent-color: var(--accent); }
+    .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 13px clamp(16px, 3vw, 28px); border-bottom: 1px solid var(--border); }
+    .search-wrap { position: relative; flex: 1 1 220px; }
+    .search-wrap svg { position: absolute; top: 50%; left: 12px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+    #search { display: block; width: 100%; height: 38px; padding: 0 13px 0 38px; border: 1px solid #d9e1dc; border-radius: 9px; outline: none; background: #fff; color: var(--ink); }
+    #search:focus-visible, .quiet-button:focus-visible, .segment:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #search::placeholder { color: #8a948f; }
+    .quiet-button { min-height: 38px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 9px; background: #fff; color: var(--accent); font-size: 13px; font-weight: 600; white-space: nowrap; }
+    .quiet-button:hover { background: var(--accent-soft); }
+    .quiet-button[aria-pressed="true"] { border-color: #b9d6c9; background: var(--accent-soft); }
+    .result-count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .transcript { max-height: min(62vh, 650px); min-height: 160px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+    .segment { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; width: 100%; margin: 0; padding: 15px clamp(16px, 3vw, 28px); border: 0; border-bottom: 1px solid #f0f2ef; border-left: 3px solid transparent; border-radius: 0; background: transparent; color: inherit; text-align: left; }
+    .segment:hover { background: #f7faf8; }
+    .segment.active { border-left-color: var(--accent); background: var(--accent-soft); }
+    .segment time { padding-top: 1px; color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
+    .segment-body { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+    .speaker { display: inline-block; margin-right: 7px; color: var(--muted); font-size: 12px; font-weight: 650; }
+    .word { border-radius: 3px; }
+    .word:hover { background: #d1e8dc; }
+    .word.word-active { background: #c4e5d4; box-shadow: 0 0 0 2px #c4e5d4; }
+    .empty { padding: 44px 18px; color: var(--muted); text-align: center; font-size: 14px; }
+    .state { padding: 54px 24px; text-align: center; }
+    .state h2 { margin: 0 0 6px; font-size: 17px; }
+    .state p { margin: 0 auto 18px; max-width: 35em; color: var(--muted); font-size: 14px; }
+    .state .quiet-button { padding: 8px 18px; }
+    [hidden] { display: none !important; }
+
+    @media (max-width: 480px) {
+      .shell { padding: 0; }
+      .card { border-radius: 0; box-shadow: none; }
+      .segment { grid-template-columns: 62px minmax(0, 1fr); gap: 5px; }
+      .result-count { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="card">
+      <section id="loading" class="state" role="status">
+        <h2>正在打开课堂录音…</h2>
+        <p>逐字稿加载后就可以点击文字回听。</p>
+      </section>
+
+      <section id="error" class="state" role="alert" hidden>
+        <h2>暂时无法打开这份录音</h2>
+        <p id="error-message">请稍后重试。</p>
+        <button id="retry" class="quiet-button" type="button">重新加载</button>
+      </section>
+
+      <div id="player" hidden>
+        <header class="top">
+          <p class="eyebrow">课堂录音 · 逐字稿</p>
+          <h1 id="title">课堂录音</h1>
+          <div class="subline">
+            <span id="duration">录音时长加载中</span>
+            <span class="time-readout" id="clock">00:00 / 00:00</span>
+            <span>点击逐字稿可从对应位置播放</span>
+          </div>
+          <audio id="audio" controls preload="metadata" aria-label="课堂录音播放器"></audio>
+          <p id="audio-error" class="audio-error" role="alert" hidden>录音暂时无法播放，请稍后重新打开课程页面。</p>
+        </header>
+
+        <div class="toolbar">
+          <label class="search-wrap">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 5 5"></path></svg>
+            <input id="search" type="search" placeholder="搜索逐字稿" aria-label="搜索逐字稿" autocomplete="off">
+          </label>
+          <button id="follow" class="quiet-button" type="button" aria-pressed="true" title="播放时自动定位当前句">跟随播放</button>
+          <span id="result-count" class="result-count"></span>
+        </div>
+
+        <div id="transcript" class="transcript" role="region" aria-label="逐字稿"></div>
+        <div id="empty" class="empty" hidden>没有找到匹配的内容。试试其他关键词。</div>
+      </div>
+    </div>
+  </main>
+
+  <script>window.RECORDING_DATA={"title":"高级机器学习--第四节课","duration_ms":8126336,"segments":[{"start_ms":160,"end_ms":40160,"text":"原来不是很想回答这个问题，但现在我觉得也行，包括你们想问一些未来发展，都 可以。前两天有个市领导跟我聊天，他说：“其实你也应该多 share 一些 knowledge 跟大家，可能有些人更感兴趣，而且这个时代也到了。”确实到了一个 不一样的情况，他们可能会获益更多。另外一方面，最近我也是跟好几个同学聊，他 们在做 new life [原词待核]，我感觉他们做得非常不一样，而且确实，","speaker":"","sentence_id":null,"words":[]},{"start_ms":40240,"end_ms":80240,"text":"研究范式和原来不一样。原来大家都是在学校、高校里，同学跟着老师，老师去申请 国家项目，申请到项目后，把 topic 给大家做研究，做完研究就发 paper。但现在情 况已经全变了，好多研究在学校里，通过国家、政府的 funding 都 cover 不住，做不 了。老师也必须去申请一些 [原转写为“your life”，待核]，甚至民间资本，来做研 究。未来我们也希望为社会多做一些贡献，包括我在的智谱，包括我们自己，包括我 个人，","speaker":"","sentence_id":null,"words":[]},{"start_ms":80320,"end_ms":108560,"text":"也会多做一些事情，多做一些公益，为社会多做一些贡献。所以也感谢大家，这确实 对我有点启发。正好咱们两周没见了，这大概两周时间，我受到了蛮多冲击，接触了 蛮多外界的知识、knowledge。所以这节课我主要给大家讲一些这些内容，大家也 可以有不同的 Q\u0026A。这节课，","speaker":"","sentence_id":null,"words":[]},{"start_ms":108720,"end_ms":148720,"text":"我们接着上节课讲的 Transformer。大家知道 Transformer 里面有四个 component。第一，把原来的循环、convolution 里面不容易做并行计算，又有 long-distance dependency 的那些不好的东西去掉，使它可以高效地并行化。 第二部分是 mask；第三是 add and norm；第四是 position encoding。这是上节课 给大家讲的。大家也知道，2017 年的时候，当时其实有很多这种我们叫 traditional，或者叫……因为大模型，","speaker":"","sentence_id":null,"words":[]},{"start_ms":148800,"end_ms":188800,"text":"到今天，有些人老问：Transformer 是不是应该被替代？这个问题已经被大家翻来 覆去地问了好多次，也讨论了很多次。最近大家可能也听说几个观点，说 Transformer 其实已经 enough 了，但里面的东西已经 totally 不一样。可以这 么理解：刚才说的这四个 component，本身也是很多不同创新的 combination，是 不同创新整合在一起的东西。你不能说 Transformer 是一个 totally new 的东 西，它是很多创新的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":188880,"end_ms":233760,"text":"combination。到今天，Transformer 就像一个 template、framework，里面的东西 也都大变了。包括刚才提到的 position encoding，原来是正弦余弦的 input，原 来是绝对位置的 coding，到现在也大变了。normalization 从原来到今天，中间也 变了很多版本。包括 attention 机制，还有 FFN，原来是 dense 的，现在变成 MoE 了 。甚至大家等一下听我们讲，","speaker":"","sentence_id":null,"words":[]},{"start_ms":233840,"end_ms":273840,"text":"MoE 的时候，可能觉得它这两年才火起来，但其实 MoE 在 30 年前就已经有了，而且 早期的 MoE 和现在很不一样。我把它叫作“老登 MoE”，到今天又全变了，有很多 不一样的东西。包括 attention，今天会把这些全部梳理一下。第二大部分会讲 optimization。但今天内容特别多，时间有限，optimization 我会讲得非常快。当 然，里面好多东西又是从传统的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":273920,"end_ms":308080,"text":"machine learning 衍生过来的，不是纯粹在大模型时代才有。比如牛顿法、梯度下 降，都是传统 machine learning 中有的，只是延伸到今天。你可能会问：传统 machine learning 为什么还要讲这么多？今天讲的 coding 等等，好像原来就有， 为什么非得讲一遍？我蛮喜欢这张图，recall 一下：大模型其实不简单，它是一个 非常复杂的超大系统。这里面，","speaker":"","sentence_id":null,"words":[]},{"start_ms":308320,"end_ms":348320,"text":"要说的就是整个大模型训练。你看第二行，训练既跟集群有关，我上上节说过不同 的集群，原来用 V100、A100、H100、B 系列训练，还有用华为、海光各种不同的卡训练， 结果跟卡本身也有很大关系。有时同样的算法、同样的 setting，放上去跑，可能很 快 NaN 就一大堆 spread 出来了，就挂了，这就是所谓的“崩了”。大家知道 NaN， 就是浮点溢出，浮点溢出就可能变零了 [原话数值表述存疑]。那你，","speaker":"","sentence_id":null,"words":[]},{"start_ms":348400,"end_ms":361440,"text":"好多地方都要做除法、做传播。比如这个值传给周围，周围再传给周围，如果有一个 值溢出了，那周围就很快全溢出、全爆了，这就是爆表。","speaker":"","sentence_id":null,"words":[]},{"start_ms":361520,"end_ms":401520,"text":"这是一种爆掉，完全没法用了。当然，这还不是最惨的。上次讲过，你可以找上一个 checkpoint，接着再弄，还可以想办法拯救回来。比较惨的是训着训着，梯度、loss 不降了。上节课讲过，我们追求的永远是一个叫 entropy floor，也就是地板熵。因 为如果训一个模型，把世界上所有的 knowledge 都表示出来，本质上就应该是这 个世界上所有知识熵最低的那个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":401600,"end_ms":412080,"text":"你就应该逼近地板熵，可能达不到，但要逼近它，永远往下走。但有时训着训着，你 发现它往上走了。","speaker":"","sentence_id":null,"words":[]},{"start_ms":412160,"end_ms":426240,"text":"怎么着都没辙，这也是要爆，你也没办法，非常痛苦。但这还不算最痛苦，为什么？因 为看到熵值在上升，你会停下来。","speaker":"","sentence_id":null,"words":[]},{"start_ms":426320,"end_ms":463040,"text":"你会停下来想办法，从一个 checkpoint 重新开始。无论是把步长缩短，还是想各 种招 [原转写此处有“b”，含义待核]，接着往下，loss 又接着降，也是不错的。我上 次说，可能中国真正把大语言模型训明白的没几个。“真正训明白”的意思是，在 一个 framework 下，把大量数据全部走完，而且上节课说过，数据还可以过多遍， loss 还会掉。有些可能一遍都没过完，","speaker":"","sentence_id":null,"words":[]},{"start_ms":463280,"end_ms":480240,"text":"就过不下去了。就像刚才说的，loss 不降，也没办法，只能 hold 住、停在这。最惨的 还不是这个，最惨的是什么？你看着 loss 还在降，好像都跑完了，结果发现模型不 work，","speaker":"","sentence_id":null,"words":[]},{"start_ms":480320,"end_ms":497440,"text":"在真实场景下不 work。这可能是 overfitting，整个就过拟合了。还有可能更诡异 ：到后训练时就不好使了。上次也讲过，有些模型前面看着都还行，到后训练怎么都 调不上去。","speaker":"","sentence_id":null,"words":[]},{"start_ms":497520,"end_ms":541600,"text":"post 确实上不去，这个模型到最后也有问题。可能第一遍 post-training 上去 了，后面再加 RL、加各种东西，又上不去，没法 improve。我们希望训一个 base，能用 好几个 post 版本。比如我们 GLM，训了 GLM-5，希望 5.1、5.2、5.3 都能用，这是好 base。如果训完只能用一下，后面提不上去，这个 base 就没用了，这也叫“爆了”， 在技术圈都可以叫“爆”。所以它就是一个造火箭的工程，里面有各种各样的技 术。你可能会说，这些，","speaker":"","sentence_id":null,"words":[]},{"start_ms":541680,"end_ms":574160,"text":"在传统机器学习里难道没有吗？比如梯度下降、随机梯度下降，拿一个 sample 算 梯度，好像没这么多问题，现在为什么问题这么多？本质上就一个词。Transformer 带来的这些问题，今天这节课要讲的，包括上节课说的，用学术的话叫 scaling。","speaker":"","sentence_id":null,"words":[]},{"start_ms":574640,"end_ms":604000,"text":"用老百姓的话，就是“大”，就是太大了，就一个字。因为要训这么大的模型，必须 并行，必须用 GPU。想象一下，假如现在还是用超算机，用 FP32 或 FP64、double 型 来算，后续好多问题可能都不存在。但因为现在，","speaker":"","sentence_id":null,"words":[]},{"start_ms":604160,"end_ms":619760,"text":"要训这么大，使用 FP32、double 型，计算量都巨大无比，必须缩减计算量。而且要并 行化，就要用 GPU。GPU 做 FP8、FP4，那就必然有 loss，","speaker":"","sentence_id":null,"words":[]},{"start_ms":620160,"end_ms":660160,"text":"必然有损，就要想招避免这些损失。有时各种调整也会带来损失。另外要 speed up， 因为几万张 GPU 卡一起跑，每节省一天，钱的量就很大。所以所有这些，本质都是太 大导致的。想想火箭，把它拆开，每个都是螺丝钉，单个螺丝钉可能不复杂，差个 0.001 好像无所谓，但要组装成火箭，各种小误差就会放大，就是这么简单的一件 事。","speaker":"","sentence_id":null,"words":[]},{"start_ms":660240,"end_ms":707040,"text":"本质上就这么点事。现在从头把刚才的事情一个一个讲一讲。第一个， self-attention，也就是 attention 机制，会带来一个问题：它没有 position。 怎么办？最简单的办法是加一个 position。原来有 input x，再加一个 position 向量，这不就有位置了？每个位置有一个 embedding，最简单就是把 P 的 embedding，也就是位置 embedding，给它 embed 出来。我们定义一个 APE，就是 Absolute Position Embedding。定义出来以后，","speaker":"","sentence_id":null,"words":[]},{"start_ms":707120,"end_ms":721920,"text":"这里面的数值，比如 1 万，是人来定义的。等一下会慢慢讲。我之前讲课说过，但凡 人参与过多的定义，慢慢都是 AI 最不喜欢的。","speaker":"","sentence_id":null,"words":[]},{"start_ms":722400,"end_ms":749280,"text":"AI 不喜欢的就是人在里面折腾。但一开始，为了让事情简单，我们总会给它 set up 一个很简单的常数或规则。现在最简单的办法，就是把它们加在一起。剩下的计算 很简单，直接做 QKV 计算，没有任何问题。计算完之后，大家可以想象，","speaker":"","sentence_id":null,"words":[]},{"start_ms":749840,"end_ms":789840,"text":"整个式子里面会有什么？每个向量里都有内容 embedding 和位置 embedding，所 以 QK 完了后，一定有内容—内容、内容—位置、位置—内容、位置—位置，相当于四 项，这是最简单的。问题是每个都有一个绝对 embedding。但在大模型、 Transformer 里，大部分计算，比如你说一句“清华大学怎么怎么样”，其实，","speaker":"","sentence_id":null,"words":[]},{"start_ms":789920,"end_ms":803680,"text":"你可能说“清华大学是中国一个很好的大学”，“大学”和“清华”这两个词 排在第一、第二、第三、第四，并不是那么重要，而是“清华”在“大学”前面，","speaker":"","sentence_id":null,"words":[]},{"start_ms":803840,"end_ms":848640,"text":"或者前面几个位置，很重要。绝对位置没那么重要，相对位置，比如在前面一个、两 个、三个位置，更重要。这就是后来提出相对位置的原因。Absolute Position Embedding 没办法把相对位置刻画得那么精准，你需要通过刚才说的位置—内 容、内容—位置这些信息，间接 capture，并不能直接拿到相对位置。怎么办？后来提 出 RPE，直接刻画 i 减 j，","speaker":"","sentence_id":null,"words":[]},{"start_ms":848720,"end_ms":888720,"text":"就是刻画两个位置之差，把它同样 embedding 起来。大家知道 Transformer 是 2017 年提出的，这个是在 2018 年。这个 paper 的作者里，有一个是 Transformer 的第一作者。上次有同学问，Transformer 的第一作者是不是怎么样，第三个 Noam 怎么样。事实上，Transformer 当时说这些作者都是 random 的。当然，","speaker":"","sentence_id":null,"words":[]},{"start_ms":888800,"end_ms":928800,"text":"这里面有各种因素。但比较公认的是，Noam 在里面技术贡献蛮大，技术贡献是最大 的，等一下会再讲。Shaw 这篇 paper 有几个 point。第一个，他们在 2018 年就发 paper 讲相对位置，等于原来的作者刚发表 Transformer 后，很快把原来的 APE、 绝对位置改了，而且程序里已经改了。后面很多人在应用过程中才慢慢发现。说到 APE，刚才这是一个非常，","speaker":"","sentence_id":null,"words":[]},{"start_ms":928880,"end_ms":946480,"text":"简单的。随着它的出现，后面有很多相关研究，甚至包括 Transformer-XL，也就是 戴子航跟杨植麟他们的 paper。他们做了 Transformer-XL，因为它是分块的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":946560,"end_ms":981120,"text":"分块的时候用绝对位置 APE 就没法弄。所以当时这个 work 也不是非要做 RPE，而 是被迫必须做这样的 design。其实弄得非常复杂，有内容—内容、内容—相对位置 等等，把它分成四个部分，再设置相对位置。后来 T5 把它做得更简单。","speaker":"","sentence_id":null,"words":[]},{"start_ms":981360,"end_ms":1020800,"text":"怎么简单？既然相对位置这么重要，而 i 减 j 计算还蛮复杂，我干脆弄成桶，隔一块 是一个桶，用桶来衡量相对距离，计算就很简单。最后还做了一些改进，非常简单地 直接刻画相对位置。这是整个 RPE 的相关进展。Transformer 出来后的若干年，这 方面有一定进展。当然，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1021040,"end_ms":1053680,"text":"RPE 后来没多久，有一个都不叫 paper，就是现在用得最多的 Rotary Position Embedding，也就是旋转位置编码。作者是苏剑林，现在在月之暗面，当时在深圳的 追一科技。他当时其实写了个 blog。今天讲的很多内容，确实都是 blog 出来的。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1053760,"end_ms":1093760,"text":"今天讲的很多算法，包括大模型现在用的很多算法，也都是先有 blog。这和当下整 个技术进展相关。早期学术界先发 paper，慢慢推，发完再开源，做一些工具，还得推 广半天，终于有人开始用了，才慢慢推广出来。后来大家等不及了。计算机原来都是 会议文章，会议要半年才能开出来；后来觉得半年太长了，就上 arXiv。所以现在好 多人不去开会，就上 arXiv。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1093840,"end_ms":1133600,"text":"到今天，连 arXiv 都觉得慢了，发一个博客，技术就发布了，就这么快。觉得值得，再 慢慢写文章，再值得，就发表。Rotary Position Embedding 基本是这个思路，一开 始是博客，直到正式发表，已经三年后了，而且发在一个可能到现在贵校贵系很多 学生不一定看得上的期刊，Neurocomputing 这个 journal，估计好多人也不发。 但 anyway，这个工作影响力非常大。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1133840,"end_ms":1173840,"text":"当然，刚发博客时也没那么火。后来在 GPT-J、GPT-NeoX 里用了，效果非常好，尤 其是国外在 X 上宣传后，PaLM [名称据上下文校正]、Llama 后来都用了，而且 Llama 给了它很多改进，把里面很多细节改了，变得特别好用。早期也有很多 bug，不是特 别好用。它的本质思想是，我不再加了，原来是有一个 embedding，再加一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1173920,"end_ms":1213920,"text":"现在不加，只调整，让它旋转方向，这就变成乘了，不再是加，本质就是这么一个东 西。但计算和推导一开始看起来特别复杂。后来的改进，包括并行计算，非常有效， 一下就火了。我们当时做 GLM-130B 时，也用了旋转位置编码。当时还是百花齐放、 百家争鸣，我们也试过不同的 embedding 方法，后来发现这个确实比较好。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1214000,"end_ms":1229520,"text":"我觉得它的好处，最后一节也会讲。现在大模型的很多选择，大家训自己的模型时 会发现，不一定每个选择都要冲到效果最好的那个点，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1229760,"end_ms":1253520,"text":"一定找到最优解、最优数据。大部分选择，其实是让整个 training 过程更 stable、 更平滑。想想，如果训练是平滑下降的过程，它总会接近地板熵，所以平滑最重要， stable 更重要。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1253680,"end_ms":1293680,"text":"position embedding 本质上就是刚才说的，假如是二维，可以把它看成复数，再乘 一个系数、矩阵，相当于转一个方向。如果 generalize 到高维，就两两配对，不是全 局的，两两配对来做。形象地看苏剑林文章里这张图，就是把输入矩阵转一个方向， 相当于做 rotation。这样的话，它，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1293760,"end_ms":1333760,"text":"其实面临一个实际问题，就是长上下文外推。Rotary Position Embedding 的长 上下文外推并不是特别好，早期做得都蛮短。后来 Meta、Llama 提出改进，大大提高 效率，才把它一下释放出来，以至于后面能很快外推到非常长的上下文。这也是当 时，我想可能，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1333840,"end_ms":1373840,"text":"Kimi 最早打长上下文时，可能受到这个思想的一些影响，当时效果还不错。后续还 有很多改进和新版本，包括刚才说的 Meta 的 PI，就是 Position Interpolation， 还有 NTK、YaRN 等等。到今天，大家已经能做出非常长的上下文。所以刚才看到这几 个 position embedding 方法，有三个不一样的东西，前面两个，基本是在原来的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1373920,"end_ms":1413920,"text":"基础上加一项，是加法；这一项变成了乘，把它乘上一项。这样，原来表征绝对位置， 现在表征的仅仅是 m 减 n，也就是两个位置间的关联关系，就是这么一个简单的 式子。最大的好处是，原来的 APE 在工程上实现 KV 等等不是特别容易。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1414000,"end_ms":1442640,"text":"当然，后面这个也有问题，需要改进，后来也加了很多改进，让整个过程做得更好。 这是 position embedding。第二个讲 layer normalization。大家早期可能听过 很多，一个很简单的 case，就是这里加了一个，加完后做 layer normalization。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1442720,"end_ms":1482720,"text":"这是非常直白、直观的。每次做 normalization，就 normalize 到一个区间，很舒服 。大家知道，我们现在用 FP8 或 BF16 来 training，区间有限，做加法后，值可能很大 ，可能爆掉。做 normalization，把它重新 normalize 到高斯分布中间，两边损失比 较小的区间就不要了，这是最简单的做法，也很直观，总会 normalize 到中间。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1482800,"end_ms":1513360,"text":"早期基本都这么做。但很快，包括 Google 早期 Transformer，文章写的还是 post-normalization，release code 时很快就变成这种形式。大家看，变成 pre-normalization。这个 normalization 和那个 normalization，两种形式看 起来，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1513680,"end_ms":1524160,"text":"差不了太多，但想一想，差别还蛮大。为什么？因为这个要让每一次，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1524240,"end_ms":1572320,"text":"之后都在区间内。这边所有梯度从头到尾贯穿，每层可以传下去；那边被 normalize 掉了。这里每次先做一个 norm，再加回去。所以它数值表现差别很大， 大家有兴趣可以看这篇 paper，是熊瑞斌当时在微软实习，跟刘铁岩做的。刘铁岩 现在是 [院校名称待核] 的院长，原来是清华 94 级电子系的，数学很好。当时我在 微软实习，他已经在微软工作了。大家可以看那篇文章，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1572400,"end_ms":1583680,"text":"里面有详细分析，把 pre-normalization 和 post-normalization 都做了详 细分析。这个东西，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1583920,"end_ms":1623920,"text":"我该怎么说？首先，不是说 pre 一定比 post 好，也不是这样。大家可以看，我们在 2021 年做 CogView、文生图模型时，甚至用了“三明治 norm”，就是 sandwich，两 边都做，post 和 pre 全做，把它夹住。本质上还是刚才说的，让它更稳定。你看，这个 的好处是每次 normal，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1624000,"end_ms":1636640,"text":"以后就不敏感，就稳定，都在区间内。但它失去了传递性，就是每层之间前面的梯度 传不到后面去。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1636960,"end_ms":1647520,"text":"这个的好处是能传过去，但有一定风险。想想，值太大了，可能爆掉。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1648080,"end_ms":1679760,"text":"因为每层有一些误差，误差传递也会爆掉，是有风险的。所以当时加了“三明治”， 上下两边都做，pre、post 都做。可以去看 CogView 那篇文章，当时是我们一个博士 生 [人名待核；原转写为“丁宁”] 做的工作。本质上就是让它更 stable，反正后来 非常 stable。但我刚才也说了，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1680000,"end_ms":1720000,"text":"所有这些，在做不同算法、甚至不同芯片、不同实验时，可能都得试一下。不是说“ 这次选 pre 就跑了”，没这么简单，每个都有自己的优势。当时训 GLM-130B、130B 那个模型时，我们选了 DeepNorm。最重要的并不是效果最好，我们当时把这些都 试了，它本质上是最稳定，训下来最 stable。这是我今天，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1720080,"end_ms":1760080,"text":"可能给大家讲的一个非常重要的 term、概念：训超大模型时，稳定比什么都重要。 在 pre-norm、post-norm 之后，现在用得更多的是 RMSNorm。和原来有什么不同？ 原来就是这个公式，我这里有点变形，但没关系，看左边原来的公式。原来是什么？ 每次都要算方差，算完方差再算这个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1760160,"end_ms":1805520,"text":"是最简单的计算公式。后来发现，rescaling 时，方差跟均值无关，可以把均值删掉， 不需要这个均值。最大的好处是不用再去算那个方差，直接把值代进去算就完了， 一下简化计算，这非常重要，因为很多计算不用再算。在大模型里，这是非常有意思 的。每次做 norm，要么减均值，要么做方差的 rescaling。如果减均值对结果没用， 就把减均值，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1805600,"end_ms":1829280,"text":"删掉，直接用方差来做就行。这样速度、加速比大概可以提高百分之五六十，甚至更 多都有可能。所以到 2020、2021 年左右，RMSNorm 基本成为标配。再到现在，大家知 道，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1829360,"end_ms":1869360,"text":"又加上残差，加了很多残差。这个概念，网上经常讨论 2000 年之后、尤其 2010 年之 后最伟大的几篇 paper，计算机几大 paper 里有一篇，就是何恺明的残差、ResNet。 当时何恺明、孙剑他们做的，就是标准残差。这个 idea 到现在也被用在几个地方， 上次说过 mHC，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1869440,"end_ms":1909440,"text":"Kimi 做了 Attention Residuals，混元也做了 iHC。各自有各自的优缺点。我们现 在的体感是，训相对小的模型时，作用更大一些；训到非常大、上 T 的时候，好多作 用会消失，甚至成为副作用，甚至让 loss 下降时反过来，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1909520,"end_ms":1934640,"text":"不再降。这就是大家用的时候要注意的：大了以后，好多性质会变。有些人觉得诡异 ，说训大模型，大了不是很简单，只是工程问题。但要知道，Transformer 到今天，所 有大模型算法和技术进步，基本都由“大”这个词导致，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1935680,"end_ms":1970000,"text":"基本都是 scaling 这个词导致。在 scaling 场景下，有些东西就是得改，而且改动 可能很小，加一个很小的 term，有的加，有的减。等一下介绍的好多都是很小的改 动，但它就 matter，会让效果提高，或速度大大提高，就是这么简单，也不复杂。所以 整个计算机领域，因为这还是个计算机的课，整个计算机领域就很怪，原来，","speaker":"","sentence_id":null,"words":[]},{"start_ms":1970400,"end_ms":1988160,"text":"我读博士做研究时，一篇 paper 不得写几十个公式？那时候得有点数学、公式，才好 意思跟别人讲。现在基本没什么公式，就这一项、这一行。","speaker":"","sentence_id":null,"words":[]},{"start_ms":1988320,"end_ms":2035600,"text":"“你看，我这一篇就改了这一行，效果非常好。”最后变成标配，你就牛了，就像刚 才说的。如果大家只是用一用，后来大了没成为标配，反正火了一下也行。如果连看 都不想看，这个 work 就没用。前两天学生发 paper，我问：“你这个 paper 有人用 吗？”好像没人用，我们自己都没用。那发这个干嘛？这种 paper 应该是减分项，应 该扣分，不是奖励。刚才这两个，第一个 position encoding 比较简单，第二个 normalization，相当于它们的进展。","speaker":"","sentence_id":null,"words":[]},{"start_ms":2035680,"end_ms":2075679,"text":"第三个，其实很多人天天在听 MoE。早期训模型时，大部分是 dense。怎么讲？MoE 的 性质到今天开始发生变化，等一下会讲原因。早期性质没太大变化，只是为了速度 快；到今天，不停调整、改变，确实有些新的性质变化，甚至模型的方差、效果可能变 得更好。但从理论上讲，dense 训好了，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2075760,"end_ms":2115760,"text":"基本已经是一个非常不错的上界。所以早期模型没训那么大，比如一千亿、两千亿， 数据也没那么大时，基本 dense 就全搞定了，没太多人探讨 MoE。到这几年发展太 快了，从最早 2017 年 Google 开始训，再到后来，Google 早期是 MoE 的先进使用 者。一方面，我觉得他们算力太多了；而且早期研究氛围，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2115840,"end_ms":2155840,"text":"非常好。每个研究员都可以做自己的研究，我有很多学生在 Google，他们有很多卡 ，研究也比较 open，没有人压着说要干什么。但最近几年也很痛苦，甚至可能更痛 苦。为什么？后来大模型变成互相卷，要成建制地卷一个东西，赶紧弄出来，不是看 谁自由研究、开放度更大。Google 早期研究比较松散，所以，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2155920,"end_ms":2195920,"text":"整体组织不起来。当时把哈萨比斯搬出来，让他把这些人整合。哈萨比斯又不是一 个 [原词待核] 的人。上次说过，早期 Google 研究都是 Jeff Dean 管，他也是非常 nice 的人，工程能力很强。哈萨比斯更是想做 AI for Science，据说最近又想重新 去做 AI for Science，不想管这一摊。所以 Google 整个研究体系不容易全部集约 化。最近他们也有新，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2196000,"end_ms":2236000,"text":"设计要起来，要一起弄下一个 Gemini。但从上到下有哈萨比斯，还有一层层属下， 整个运作模式还是蛮复杂的。最近也听到他们很多动向。前段时间跟一个原来我 们实验室的同学聊，他现在在 Gemini 负责一块。他说原来 3.5 训时，大的训崩了， 而且训基模和 post-training 的两个团队完全独立，基模的人训完，也不怎么 跟 post-training 团队交互，相当于给你，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2236080,"end_ms":2270720,"text":"pretraining model，你去搞，或者把 post 全部搞好，也是非常痛苦。所以当时 3.5 不是很成功。据说最近 4 还行，我还没怎么用过，不知道同学有没有试过，据说还可 以。早期做了很多研究，我们也做了一点。但真正细数下来，早期好多确实偏研究性 ，可能直到 DeepSeek V3，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2270800,"end_ms":2294880,"text":"就是 R1 火了以后，所有人开始卷 MoE。这带来了一个很重要的变化。后来各种各样 的，基本有两个派系：一个是做大激活，模型训得特别大，激活也特别大。","speaker":"","sentence_id":null,"words":[]},{"start_ms":2294960,"end_ms":2326640,"text":"激活特别大的问题是训练量、计算量特别大，但好处是更稳定，效果有可能更好。所 以像 Anthropic，应该走大激活。另一个是小激活，如果训得更好，计算量小，可以做 很小的激活，效果可能差不多，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2327040,"end_ms":2367040,"text":"几乎差不多，计算量就非常小。上节课讲 scaling，总计算 budget 就这么多，计算 量小，就可以加参数。所以 Google 比较喜欢走小激活，Anthropic 是大激活，有几 个路径。OpenAI 早期应该也走和 Anthropic 几乎一样的路线。大家知道 Dario 从 OpenAI 出来，早期在里面做 scaling，那一套应该一模一样。我估计直到 GPT-5， GPT-5 应该训崩了，就是，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2367120,"end_ms":2414400,"text":"训大模型比较惨，你要训崩一代，基本停半年，半年里模型领先不了了。大家可以细 数主要模型，比如 Meta、Llama 训崩，停了一年，团队都被干掉了。国内好多模型也 训崩了。有时刷一些榜，但好多模型在体感上也很难。重新训一个，让效果好起来， 起码半年。从基模训崩、重整数据和各种东西，再开始训，基本半年时间就没了。所 以，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2414480,"end_ms":2439840,"text":"刚才讲了两个派系。说一下 MoE 最早的逻辑。大家应该原来学过一些机器学习，比 如最简单的概率模型、高斯模型、高斯混合模型、mixture model，这些学过。","speaker":"","sentence_id":null,"words":[]},{"start_ms":2440000,"end_ms":2466160,"text":"大家记得，比如训一个高斯，高斯的高斯还是高斯。可以在高斯上面加个 mixture， 在高斯均值上再加个 mixture。所谓 mixture，用这张图看很简单：一个 input 分 到不同 expert 里面，这些 expert 可以有 overlap，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2466240,"end_ms":2496080,"text":"也可以没有。混合高斯可以有 overlap，信息在里面有重叠，但有分布，比如百分之 多少。100% 的信息分别分到不同地方，10% 在这、20% 在这、70% 在这，最后再 mixture 起来，就是这么简单。这是概率，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2496480,"end_ms":2536480,"text":"这是 mixture，这是 information，你可以叫 expert，最早叫 expert model。这里 有 Hinton，几个作者都很牛，下面有 Michael Jordan。他原来跟 Hinton 老爷子做 过博士后，后来也成为 machine learning 里极其厉害的大牛，Hinton 就不用说 了。早期 idea 很简单，就是 mixture model，把它 mixture 起来，因为 mix，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2536560,"end_ms":2550400,"text":"有什么好处？大家可以证明，证明很简单：均值不变，得到的结果不变，但会降低方 差。","speaker":"","sentence_id":null,"words":[]},{"start_ms":2550800,"end_ms":2576800,"text":"mixture model 会降低方差，证明一下就知道，它会 more stable。早期不是做现在 Transformer 做的事情，而是让不同的 information capture 得更准，并降低 variance，就是这么一个东西。到后来，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2577200,"end_ms":2617200,"text":"上次说的 Noam，他 2017 年干了两件事：第一是 Transformer；第二是训了一个当 时叫巨大、超大的模型。我感觉早期 Google 的研究挺牛，2017 年就能训千亿模型， 当时还没 Transformer，是用 LSTM，加一个巨大 expert model，训了一个千亿的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2617280,"end_ms":2657280,"text":"非常大。所以你想象，2017 年训千亿模型，听起来很 fancy。效果反正没那么好，当 时也不是现在这么细粒度的 MoE，还很粗粒度。如果像刚才这样把所有 expert 展 开，计算量和下面的选择都非常复杂。当时为了训巨大模型，选了 Top-K [具体 K 值待核] 来做，已经训出来，相当于整个 MoE 的一个前身。","speaker":"","sentence_id":null,"words":[]},{"start_ms":2657360,"end_ms":2697360,"text":"当然，后面真正让它 critical 的，一个是 2021 年 Switch Transformer，一下训 到万亿，突破很多问题。包括非常精确地选择 Top-1，只选第一个 expert，让路由 特别简单。Google 当时想了很多方法减少通信，解决 expert 间通信、万亿模型怎 么训、怎么 scaling，还有稳定性。这一系列探索其实帮到后面的 DeepSeek MoE，把 后面 DeepSeek 的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2697440,"end_ms":2737440,"text":"很多问题一一解决，把原来探索过、存在的问题解决掉，而且细粒度化，每个里面 control 一个 information，再用 shared expert，把所有 shared knowledge 训 到这个 shared 里。所以可以讲，Google 的 Switch Transformer 实现的是参数 efficient：能训到万亿模型这么巨大的量级，因为 Google，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2737520,"end_ms":2777520,"text":"工程能力很强，实现了在万亿上能训出来。后面这个则把它变成更 efficient 的 工程实现，在更小的粒度上，不像 Google 用那么大的计算，仍然可以训接近万亿 的东西，这是非常重大的。除了细粒度，还有其他工程上的东西，比如通信，今天不 作为重点。细粒度加共享机制，一下把它改了。再，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2777600,"end_ms":2817600,"text":"后面，MoE 和 dense 原来还有些选择，但最终 MoE 确实会大大降低计算量，GPU 的 计算量摆在这，它能省钱。能省钱，工程上大家动力巨强，迅速就转过来，没有太多 选择。算过账，跑一下，确实省这么多钱，就转了。但 expert model 也有很多问题，比 如这么多 expert，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2817680,"end_ms":2836400,"text":"有的肯定很 heavy，比如路由器老路由到它，它老被训练；有些老不被路由到，就不 被训练，训练得差，很不平衡。当时 DeepSeek 也解决了很多这种问题。刚才说，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2836640,"end_ms":2876640,"text":"当时全球除了 Google，其他家研究都不深，只是跑一下。Google 2021 年弄完，加上 之前讲的 Noam，那帮人出去创业，全跑了，人才流失。后来 OpenAI、DeepSeek 和很 多模型起来，Google 觉得模型实在不行，把 Noam 请回去，最近 Noam 又跑到 OpenAI。我发现 Google 也有很多问题。大家认为那段时间，Google 的研究，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2876720,"end_ms":2916720,"text":"在很多 MoE、大模型研究上比较停滞，很多研究转到“水”里去了。而很多进展，比 如负载均衡，让不同 expert 上的负载更均衡，基本是加一个均衡器，说白了就是 均衡损失，让它更均衡。当然，也可以做最优均衡，不同配置之间，这个损失可以，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2916800,"end_ms":2956800,"text":"约束它们的平均。另外，均衡损失和语言模型损失放在同一模型里，又可能打架。所 以还要加一些平衡，叫 load balance，不能让均衡损失变大，导致模型损失变大， 后来加这个也非常有效。所以这几点，包括负载均衡、细粒度、shared experts 这 些技术，把 MoE 基本，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2956880,"end_ms":2996880,"text":"带到今天经常看到的框架。讲 attention 之前，给大家几分钟提问。刚才说 MoE 最 近发生的新变化，可以说一下。我说最近更多是 attention 上的变化。——老师，前 面说的那个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":2996960,"end_ms":3017360,"text":"pre-norm 的时候，残差 add 那部分不是没有被 normalization 吗？它把 normalization 之后的注意力形式，加到一个没有 normalization 的里面，上面 为什么这么做？","speaker":"","sentence_id":null,"words":[]},{"start_ms":3018000,"end_ms":3042880,"text":"它的好处，就是梯度可以一直传下去。normalize 掉以后，其实丢了一些 information，不会一直传到最后。这个唯一的好处是一直传下去，但假如有误差、 方差，也会不断放大，所以有好有坏。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3043040,"end_ms":3080080,"text":"——后面有没有方案解决它的坏处？——怎么讲，效果上，这个 post-norm，当时 有这么一个说法，但也不一定准。真在不同模型里试，还有一点差别。当然现在好多 用后面那个。一般效果来讲，这个会更好一点点，但稳定性上，这个更稳定一些。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3080240,"end_ms":3090960,"text":"还有什么问题？我可以在这两个资料里面……","speaker":"","sentence_id":null,"words":[]},{"start_ms":3093920,"end_ms":3140160,"text":"这是一个大问题。不过也可以稍微吹吹牛。今年初搞了一个活动，我记得叫 AGI Next [活动名称待核]，把舜宇、杨植麟、林俊旸他们都请出来。他们说搞活动，我说搞 什么，后来就说少请几个人，我们聊。当时有一页 PPT，我说今年会发生几件事，很多 人不信。第一，今年肯定是 AI for Science 爆发年。我当时没说 exactly 今天，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3140240,"end_ms":3180240,"text":"我说到今年底，AI for Science 肯定爆发；第二，AI 加 robot 肯定爆发。我说了这 两点。如果说明年，第一个，我觉得每个人都会有一个非常 [原形容词待核] 的 agent，这是今年肯定会发生的事，每个人都会去折腾这么一个事情。再说其他，我 觉得大模型会在 AI for Science 里做得非常深，因为今年爆发了很多，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3180320,"end_ms":3220320,"text":"但好多人用时还有各种想法。比如前段时间跟数学系聊，我记得邱先生说要做“ 庞氏猜想”[猜想名称待核]，我说可以探讨。还没聊多久，好像最后他们被北大先 做完了。大家就开始说，北大拿到 token 的速度比清华快。今年 AI 在数学这些方 向，做出来的东西都，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3220400,"end_ms":3243120,"text":"在证明已经证明出来的，基本已经证明出来了。但我觉得明年很有可能证明出没 有证明出来的，那才是真正 AI for Science 的一些东西。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3243200,"end_ms":3254000,"text":"这个我觉得肯定。AI 自我进化、自我迭代，是一步步的，它会先做可以叫 automation 的东西。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3254240,"end_ms":3294240,"text":"第一步是 automation。比如原来训一个模型，有很多手工的东西，先执行什么程 序，再执行什么，包括优化、适配国产芯片，都有一些规则、有一些招。第一步是把这 些全部自动化。原来人要编很多程序、写程序类型，它自动写出来，就这么简单，没 有什么特别大的创新，这是第一步。第二步是一些流程优化，比如，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3294320,"end_ms":3334320,"text":"workflow 的全面优化。原来 workflow 人来定，现在会全部变成 AI 自动实现，而 且会自我迭代、自动优化。第三步，我甚至怀疑他们现在已经做得挺好：整个过程， 包括模型训练、post-training，全部 AI 化。我觉得是比较大的变化。国内做得更 多还是第一步，模型这块做得多，正往第二步走。国外可能在往第二、第三步走。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3334400,"end_ms":3379680,"text":"——老师，您训练模型时，觉得国产卡和国外卡之间效果差距大吗？——这个问题 不应该是个问题。第一，差别挺大，主要性能和各种调优，差别挺大。第二，国产芯片 也可以训。之前说过，我们在 2020 年用海光，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3379760,"end_ms":3403840,"text":"这些都已经是历史了。当时海光最早买的 AMD 芯片，大概 5000 片，训了我们 29 亿 参数模型。5000 片训 29 亿，因为那时卡特别弱，16 片才等于一片 V100，好像是。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3403920,"end_ms":3452080,"text":"当时 16 片等于一片 V100，5000 张卡相当于 300 多张 V100，所以训了 29 亿模型。 后来在华为第一代 [型号待核：原转写为“980A”] 上，训了第一代 coding 模型， 一百多亿的模型。所以国产芯片还可以训。包括今年，在海光比较新的卡上，也训出 七百多亿的东西。但有很多问题：第一，内存，原来一些版本内存小，训特别大有问 题；第二，带宽问题也很多；第三，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3452160,"end_ms":3473040,"text":"精度问题，国产芯片早期好多版本精度不够。训练要精度对齐，但说实话，现在都在 FP4、FP8 训，哪有什么精度对齐？英伟达上现在精度也不对，你都没法对齐。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3473600,"end_ms":3513600,"text":"所以这是更挑战的问题。甚至最后可能也没有真正的对齐、不对齐，最终就是端到 端输出，效果好就行。国产芯片可能要走很痛苦的一条路，但现在也不得不做。有几 款芯片效果还可以。明年国产芯片可能会大规模用于训练和推理。——刚才您提 到 MoE 是非常精细的路由，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3513680,"end_ms":3535360,"text":"从个人经验看，感觉 DeepSeek 在“金融治理”[能力名称待核] 方面强一些，另一 个在工具使用等功能方面更强。这种差异是 MoE 设计、平时训练的路由偏好和分 布问题，还是一开始各家 MoE 架构设计的问题？","speaker":"","sentence_id":null,"words":[]},{"start_ms":3535440,"end_ms":3575440,"text":"——并没有偏好，跟那个没什么关系。DeepSeek 现在工具调用等能力没起来，主 要是 V4 Pro 没训好，现在是 Flash。Flash 很小，自然能力没那么强，学到的知识量 小。上次讲过 scaling 的重要性。Kimi 现在是 2.8T，大一些，就容易学好，能力更强， 这是很自然的。现在拿几百 B 和一个二点几 T，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3575520,"end_ms":3593920,"text":"它们差五倍，4.1 Flash 跟新的这个差五倍大小，差得太大了。我们稍微休息一会， 等会再问。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3594384,"end_ms":3634384,"text":"可以这么讲，Transformer 放到今天，好像没有变，有些人老说它过时，其实它像一 辆汽车，壳还在，里面所有东西都换掉了，甚至包括发动机很多组件。更重要的当然 是 attention。第一个讲 FlashAttention，作者是 Tri Dao。他现在是，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3634464,"end_ms":3674464,"text":"大学的 assistant professor，也是 Together AI 的 [职务待核]。他还是 Mamba 的 作者。一方面能做看起来像工程问题的 FlashAttention，加速、减少 memory cost ；另一方面，又做 Mamba 这种算法，把 Transformer 重新定义成 SSM。他挺牛。他老 板叫 Chris Ré，我蛮熟，因为我有个学生，原来九字班的，我那个九字班学生，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3674544,"end_ms":3714544,"text":"我觉得也很神。他当时贵系本科，排第十左右，但心气特别高，说只去四大，四大里 还看不上 UC Berkeley，只看得上 MIT 和 Stanford。后来我推荐他，只写了两三所 学校，反正去了 Stanford。他最喜欢的是 MIT。第一年在 Stanford 待了一年后又，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3714624,"end_ms":3741824,"text":"申请 MIT，第二年好像真申请到了。但后来在硅谷待久了，就不去了，觉得硅谷更好， 在 Stanford 读 PhD，跟的老板就是 Chris Ré。我为什么讲他？他挺猛。我后来发现 ，从我学生开始读的时候，他刚到 Stanford 没几年，是做 database，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3741904,"end_ms":3789584,"text":"做数据库的。从那一年开始，几乎每年创立一家公司，当然有些是学生的公司，好多 他在 running，有些占股，有些控股，特别多。刚才说的好多公司，包括我学生创的一 家，他都在里面，现在我学生那家公司卖掉了。他还创了 SambaNova。大家可能不一 定知道，那我说另一个，Cerebras，做芯片的。SambaNova 没有 Cerebras 做得好，是 被打败的那个，但也做得很好，它可以把，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3789664,"end_ms":3802224,"text":"我们的模型推到很快。5.0 刚发布时，我们推得很慢，几十 token、几十 TPS，它那个 SambaNova 可以直接做到几百 TPS。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3802624,"end_ms":3842624,"text":"当时把模型给了 Cerebras 和 SambaNova。SambaNova 因为各种原因，老板也很 mean、很刻薄，就没合作。Cerebras 一下帮我们适配完，做到几百，峰值甚至 1000 TPS。当时它拿去卖，因为我们开源，一天就卖完，全部收到了。所以我讲这个，是说研 究和当前技术进步，确实是在什么样的环境下，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3842704,"end_ms":3882704,"text":"疯狂卷出来。他老板早期做数据库，自己又做芯片公司，也做大量数据相关的东西。 数据库早期做很多算子、并行等优化，所以他们做了 FlashAttention。他居然还 做了很多，我觉得最正经的是 Mamba，能做出来也很牛。这些跳过，直接讲 FlashAttention 主要 idea。细节可能时间不够，大家回头认真看。大家知道，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3882784,"end_ms":3922784,"text":"存储器、内存里，GPU 有 CPU 存储器、GPU 的 HBM，还有 SRAM，这三层有带宽限制。这里 应该以 A100 为例，现在 H100、B300 完全不一样，但总体架构基本一样。什么意思？ 这个存储可能很小，那个可能是它的 100 倍、1000 倍，再上面的更大。CPU 可以做到 非常大，几个、几十个 [容量单位待核]。","speaker":"","sentence_id":null,"words":[]},{"start_ms":3922864,"end_ms":3962864,"text":"存储小的带宽非常大，另一边带宽反过来。很多计算要一层层 load 进去。本质上 我们做 QKV，假设先从 HBM 把 QK load 进来，算出 S，把 S 写回 HBM；再 load 回来做 softmax，再做输出。这一套下来，是多次访问，","speaker":"","sentence_id":null,"words":[]},{"start_ms":3962944,"end_ms":4002944,"text":"HBM，访存带宽就变成局限。Tri Dao 他们的 idea 很简单：既然有这个问题，就减少 读写次数。这张图有点变形，可能有 bug，但就是把读写次数减少，一个简单 idea。 整个程序写下来很简单，里面最漂亮的是一个非常细腻的工程。比如每做一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4003024,"end_ms":4043024,"text":"max，在 for 循环中可以把中间结果存下来，每层这么存，最后做 softmax，中间可 以减少大量计算。整个循环程序改起来很简单。做 KV 计算时，对每个元素，load 一 次，算完一个 O，把整个 QKV 加 softmax 一次性算完，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4043104,"end_ms":4083104,"text":"再写到 HBM。从某种角度，也可以叫在内存中做。第一次课提过，现在大模型时代，好 多算子在做 kernel fusion，就是把几个算子、几个操作做成一个操作，减少外面 读写，操作就快了。这里逻辑也一样，几次访存读写变成一次，这样就快了，一下把 当时读写复杂度，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4083184,"end_ms":4123184,"text":"大大降低。原来早期读写复杂度是 [原转写此处有“NB、N 平方”，公式需对照课件 ]，现在是 N²D²/M。A100 的 M 比较大，D 又比较小，所以这样把速度提高了。它有 两个好处：第一，看原始的 GPT-2，可以提高将近七倍；第二，更重要的是 context 增长，比如原来 1K 加到 4K，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4123264,"end_ms":4163264,"text":"速度仍然可以比较快，可以开始增长。这是 FlashAttention 很重要的进步。后来 有第二、第三、第四个版本，针对现在的 [硬件术语待核：原转写为“第三版、flash v2”] 等技术趋势，做了非对称缩放，把性能、Tensor Core 性能大大提高。从 H 系列 到 B 系列性能大大提高以后，一下把，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4163344,"end_ms":4180784,"text":"计算又改变了。GPU 时代所有计算都是这样，有很多微参数。一个微参数是瓶颈，你 把它疯狂提高，其他微参数可能就变成瓶颈。","speaker":"","sentence_id":null,"words":[]},{"start_ms":4182144,"end_ms":4222144,"text":"其他参数原来不是瓶颈，但这个提高后，它们就变瓶颈。所以硬件和软件都在改，一 会改这，一会改那，所有人都在干这种事。后来 FlashAttention 4 还做了一件事， 在 forward 里做流水线重叠和指数计算加速。这也可以把 forward、backward… …其实也可以叫一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4222224,"end_ms":4262224,"text":"原来早期 FlashAttention 跟算法无关，只做 memory，把几个操作变成一个，不管 具体算法和细节。到 FlashAttention 4，就考虑 forward 怎么做、怎么减少过程， 再把 backward 单独拎出来，让反向更快，做了很多细节，大大提高 performance。 当时做完这些改进，后来应该直接被 CUDA，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4262304,"end_ms":4302304,"text":"吸收进去。新的版本里，最新 [版本号待核：原转写为“9.1、19.1”]，已经跟它们的优 化差不多。这从另一个角度说，属于有用的研究：做研究、做开源，FlashAttention 本身开源放出来，后来被大生态吸收，变成标配，就比较牛。这比发一篇 paper 还牛 得多。现在其实，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4302384,"end_ms":4342384,"text":"尤其计算机界的研究反过来了，是很不一样的事情。这里快速讲了一些 [原词待核 ：原转写为“和 HR”] 的变化。另外非常重要的是，刚才 attention 优化的是硬件 执行率，同样的东西，通过减少内存读写、优化操作，速度更快。但 attention 机制、 Transformer 永远是 N 平方，很慢，怎么讲都慢。怎么办？","speaker":"","sentence_id":null,"words":[]},{"start_ms":4342464,"end_ms":4382464,"text":"出现很多改进，比如 BigBird。它的几个作者，有一个也是 GQA 的作者，GQA 回头会 在 inference 部分讲。关键是提出 BigBird idea 时，还给了一些理论证明。idea 是现在只需要 random 一些 attention，原来的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4382544,"end_ms":4422544,"text":"attention，随机选一些，再加 window attention、global attention，别的都不要 ，整个 attention 一下大大减少，所以叫 BigBird。大模型界早期什么 ELMo、BERT 等等，都是《芝麻街》里的名字，一个个出来。这些我觉得都是很早期的，这样，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4422624,"end_ms":4462624,"text":"就可以降低注意力复杂度。早期单纯 sparse Transformer、sparse attention，可 能从 N 平方做到 N 的 1.5 次方。如果像刚才这样做，叫 radial attention，主要是 距离近的 window attention，然后按距离逐渐往外稀疏化，就可以做 log scale， 复杂度到 N log N。","speaker":"","sentence_id":null,"words":[]},{"start_ms":4462704,"end_ms":4502704,"text":"可以想象这是 log，距离越远越小。BigBird 差不多能做到 O(N)，关键有很好的 理论点，我觉得比较优美。第二是滑动窗口，也非常重要。当时作为组件也是 window，后面 S2 attention 等大量使用。通过滑动窗口，大大减少 attention 计 算。当然整个 attention，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4502784,"end_ms":4542784,"text":"还值得非常多深入研究。我们系陈建飞做过 SpargeAttn，大家可以看 paper，idea 很好。刚才讲，计算机里人为指定的 attention 理论上都不是最优，因为机制都是 我们设定的。他发现里面大量 attention 其实是零，就 automatically 发现零和 非零的 attention，天然就是，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4542864,"end_ms":4582864,"text":"sparse 的。当然还需要很多探讨，后面大家可以做研究，肯定有很多研究空间。现 在 SWA 已经是很重要的标配，后面很多地方，包括 Mistral、Character.AI、Gemma、 DeepSeek 4.1 Flash，都大量使用。还有 S2，是 2024 年的一个代表，除了 window 加 stride，还加了一些 KV efficient 的东西。什么意思？","speaker":"","sentence_id":null,"words":[]},{"start_ms":4582944,"end_ms":4622944,"text":"我们做的这些都有 KV cache，随着它越来越大，要考虑怎样更 efficient 地计算， 而不只是当前 sparse attention 怎么做。这里很多优化甚至要考虑后面的 inference。第二是 kernel optimization，S2 做了很多这些优化。还有 NSA，也非 常重要，[年份待核：原转写为“2012 年”] 发了这个 NSA，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4623024,"end_ms":4663024,"text":"后来也拿到 ACL 的最佳论文。native 这个词起得非常好，这是很重要、到现在用得 蛮多的一个 idea。第一，端到端训练；第二，有 block-aligned kernel，很容易 speed up training 和 decoding 过程，这是很重要的一个分支。另一个是 MoBA，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4663104,"end_ms":4703104,"text":"月之暗面用得比较多，是 block 的 [原词待核]，现在也是很不错的 idea。原来 MoE 是 token 选专家、做路由；这里是 query 选 KV，对 KV 很友好，也很容易做。比如 Kimi 要做 long context，就可以做。做长上下文时，它可以做，因为大家知道，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4703184,"end_ms":4743184,"text":"下节课讲 inference，会讲 PD 分离这些。它在 prefill 时也可以做得很快。现在 input 非常长，尤其写代码，原来早期几 K、几十 K，现在几百 K 很正常，甚至接近一 兆。其实现在一兆大家都嫌少，但很多一兆是“伪一兆”，一兆 token 的上下文，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4743264,"end_ms":4783264,"text":"没几个是真一兆，大家可以做实验。之前跟某个模型的人聊天，他说不是很容易吗， 刷一下就上去。后来去看，发现他们做得比较“稳”[此处原转写可能有误，待核]， 一兆可能真正有效就二百多 K，再往上效果就不行，误差非常大。当然这里讲更多 的是速度，MoBA 可以大大提高速度。","speaker":"","sentence_id":null,"words":[]},{"start_ms":4783344,"end_ms":4823344,"text":"去年 DeepSeek 在 V3.2-Exp 里做了 DSA，最大区别是不再选块，直接选 token。刚 才 query 选块，这里直接选 token，用一个非常轻量级的 index，很容易选出来，后 来效果非常好，也广泛使用。这几个核心技术，把这些稀疏注意力串起来，是一个很 ，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4823424,"end_ms":4863424,"text":"重要的 pipeline。最早像 BigBird，是比较早的 design；后来选粒度、选固定模式， 比如 block；最后不再只是选这些，核心都在跟 KV cache 这些合作、共赢、压缩，包 括 index pool 等怎样压缩，让成本更低。","speaker":"","sentence_id":null,"words":[]},{"start_ms":4863504,"end_ms":4903504,"text":"到现在大部分人在做这些。这也是最近的工作，DeepSeek 4.1 Flash 有个 [机制名 待核：原转写为“csc2”]，很不错。里面引进很多新技术，包括 global KV entries、 layer-local sliding window，还加 hierarchical sparse index，大大降低开 销。因为原来，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4903584,"end_ms":4943584,"text":"用前面那些 sparse attention，做 serving、把大模型拿去推理时，一般比如有 144 的内存，可能 50% 用来存模型，30% 预留做 KV cache。这里可以大大降低 KV cache，很重要。我们 5.3 里面加了 index share，引进以后，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4943664,"end_ms":4956864,"text":"因为 5.3 和 5.2 本质一样，基模一模一样，只是做很多 post-training。但是，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4957264,"end_ms":4997264,"text":"每次都要建 index、要用，cost 很大，所以加 index share，复用索引，可以得到很大 提高，共享更多，可以想象这些效果。最近又发 5.3 Flash，它跟 5.3 不是同一个基模 ，是 totally new 的，而且是多模态，里面加了多模态。所以 5.3 Flash 不是 5.3。有些 人可能觉得它速度没那么快，这是因为它大，","speaker":"","sentence_id":null,"words":[]},{"start_ms":4997344,"end_ms":5029584,"text":"部分现在都在国产卡上推，一款比较老、很早期的国产卡，在中国建了十万片。我们 就在上面推，已经压榨到极致，基本没有再提高的空间，但还能用。为什么用国产卡 ？就是没有芯片。我们说，那，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5029664,"end_ms":5044144,"text":"还训这个模型干嘛？后来发现还有点国产卡，要不用它，好歹算增量，就这样。所以 5.3 Flash 是 300B，不是特别大的模型，但它是全新的 base。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5044224,"end_ms":5084224,"text":"下一个版本可能就在这个 base 上稍微调一下，基本就是这个 base。它比 5.3 更好 ，激活也不大，三百多 B 的模型，18B 激活。我们走适中的路线，不是极端小。极端小 风险很大，容易训崩；太大计算量又特别大，所以相对适中。这个模型相对比较成功 ，大家试的时候，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5084304,"end_ms":5124304,"text":"会发现它是多模态，整个缓存、速度，还有 KV 压缩，用了 4.4 倍 KV 压缩、三倍注意力 计算 [原转写此处指标表述不清]，整体结果不错。最近还有 hybrid，linear 和 sparse 都可能做 hybrid 架构，有些技术在探讨，大家可以关注。前两天千问还有 一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5124384,"end_ms":5164384,"text":"Gated DeltaNet，有点类似 LSTM 的遗忘机制，用门控来做，很有意思。出来时很多 人探讨千问模型。但我个人觉得，加这种东西，像 LSTM 一样加太多，不是未来大模 型的主流趋势。大模型、AI 的逻辑是越少越好，这种迭代应该越少越好。所以千问，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5164464,"end_ms":5201024,"text":"不是有个 2.4T 吗？我个人觉得它可能没训得特别好，效果比放出来开源的也基本 好不了特别多。当然因为没开源，我们也没详细挖，大家试得多，结论可能比我清楚 ，我只是说一下。Kimi K3 是不错的，当时用了 Kimi 的 delta attention，里面也加 了 forget gate。然后，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5201744,"end_ms":5241744,"text":"K3 有几个好的点，可能未来也有不足。第一个好处是大激活，训起来相对更稳定， 成功率更高。这是他们当时训的一些结果。当然也有问题：第一，没用 sparse，使它 推理速度特别慢。线上 K3 推理非常慢，成本很高，因为推理需要很大计算量。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5241824,"end_ms":5269664,"text":"最近应该马上放 3.1，我相信这方面做了很多改进，会大大提高速度，大家可以看。 我相信会加 sparse，当时放出来后，我第一个问题就是为什么不加 sparse，不然 成本这么大。出来时涨价将近一倍，没办法，因为，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5270704,"end_ms":5310704,"text":"成本实在太高，计算量太大，也没法大规模用。OpenRouter 上用量不大，好多用不 起来。但相信下个版本会大大改进。总体上，未来 hybrid 可能成为很重要的主流， 里面加线性、sparse 的一定配置。大家可以多看不同框架，最近 MiniMax 也做了 一些，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5310784,"end_ms":5350784,"text":"千问、国内这些公司都在 hybrid 上做更多东西。这些就是 attention，大家回头 多读相关材料。下一节讲 optimization，再给大家几分钟提问。刚才说的“大”， 它不叫各模块变形，而是各模块都在优化。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5350864,"end_ms":5374144,"text":"为什么这么做？模型越训越大，每个都变形、都不对，必须 update，就这么简单。我还 是用造火箭的逻辑：不是火箭形状那么重要，而是里面燃料也很重要，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5374224,"end_ms":5391264,"text":"里面某些小模块也很重要，都决定很多东西。大模型到今天一样。——前面您说真 假，您告诉我这个不是开源的，为什么还要……","speaker":"","sentence_id":null,"words":[]},{"start_ms":5391424,"end_ms":5415744,"text":"——不是，我说真假，是说上下文很大时，效果会变差。我说的是真正增长到 800K、 900K、600K 时，performance 还比较好，说的是这个。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5416784,"end_ms":5439904,"text":"[提问前半段原转写不清；保留原转写：“那个采购中心的时候，你知道那个大金木 小区我们那个几乎打满了，不就是那个凳子吗？”] ——我想问，比如 K3 [版本号待 核] 可能加一个，加了之后会有一些具体……还是说……","speaker":"","sentence_id":null,"words":[]},{"start_ms":5440304,"end_ms":5480384,"text":"——不用，就在后面加就行，base 可以在后面加一下。我觉得应该也知道，但不一 定，我不知道有没有发布。这里有没有在 Kimi 实习的，可以问同学。[后半段原转写 不清：“生产个团队，然后把我们的脸换上去就行了。”] 我觉得这是一个很好的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5480464,"end_ms":5500304,"text":"但科学进步永远这样，一个算法、一个东西，完成一个历史使命。我觉得 Transformer 到目前在完成两个历史使命。如果人类发现新的智能东西，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5500624,"end_ms":5540624,"text":"不一定要重构已经做的历史使命。现在两个，第一个，把所有知识存下来，相当于全 球知识都在这里，没必要重构、把知识又存一遍。除非压缩比不够，像 Mamba 等后面 很多模型想解决的问题：Transformer 压缩比不够，能否找到更新算法，更大程度 压缩？但 GPU 发展特别快，所以找新算法存储它等，理论上动力，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5540704,"end_ms":5566544,"text":"没那么强。所以这是知识这块。第二个是推理和 alignment。[疑似背景串音，保留原 转写：“收了 22 份文件，你看这个和父母子女一体的占绝大多数，所以说这个场 景是可以挖掘的。”]","speaker":"","sentence_id":null,"words":[]},{"start_ms":5567184,"end_ms":5607184,"text":"我说动力没那么强，但后面 RL 那块可能动力更强。RL 现在泛化能力没那么强， pretrain 泛化更强。现在国内大模型 RL 做得都不好，post-training 做得都没 那么好。[此处指代不清] 可能也没做那么好，但可能比我们中国做得好。我觉得可 能找到一个新机制替代 RL，也许挺好。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5607264,"end_ms":5623264,"text":"——大语言模型发源于自然语言处理。从表上这些最新技术看，哪些方面还能看 到自然语言处理技术的……","speaker":"","sentence_id":null,"words":[]},{"start_ms":5624144,"end_ms":5659104,"text":"——Next-token prediction。自然语言处理，早期 language model，1980 年代 就在预测下一个单词，现在 next-token prediction 不还在做这个？——多模态 有一个新术语叫世界模型，现在输入不再是自然语言、文字，而是图像或视频，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5659264,"end_ms":5684064,"text":"这种多模态，或纯视频的世界模型，跟大语言模型有没有相互借鉴的地方？——我 觉得到最后，可能最好的办法是在 knowledge、Transformer、语言模型基础上往 外扩。没有智能的世界模型，没有特别大的前途。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5685024,"end_ms":5707664,"text":"至少当前看到的所有智能还源于语言。——今年六七月份发布的那个，说是“越 狱”了，后来叫停，对安全有很大问题，您怎么看这个事情？","speaker":"","sentence_id":null,"words":[]},{"start_ms":5707824,"end_ms":5747824,"text":"还是噱头？——越狱是真的。当时是这样：做大模型好多时候要做后训练、RL，要搭 环境，很多环境搭沙盒，让模型在里面完成一个任务。比如让它 check 一些安全措 施。应该原来是 OpenAI 把 Hugging Face 搞挂了，在沙盒里让模型做事，但模型跳 出来了，一直，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5747904,"end_ms":5761664,"text":"逻辑很简单，沙盒也有 bug，让模型找 bug，有可能就跳出来。跳出来以后去攻击真 正的 Hugging Face，攻击完还把攻击日志全删了。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5761904,"end_ms":5801904,"text":"这确实是真的。后来 Hugging Face 用了我们 5.2 模型，recover 所有路径。当时我 们模型安全能力还不错，把攻击路径全部复原，再去找到是谁干的。当时不知道谁 干的，复原后说这是怎么干的，最后对方承认是他干的。对外发布可能说模型安全 能力或攻击能力太强。我觉得未来安全可能是这样：首先不得不面对现实，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5801984,"end_ms":5841984,"text":"它 coding 能力越来越强，基于 coding 会做很多事。安全本质也是 coding，写程 序攻击对方、写程序防御，都是 coding，所以能力越来越强。甚至现在很轻松就能 做，你给个网站，说搞挂，真能三下五除二搞挂，现在就这么强。——咱们 GLM 有没 有这块？——可以试，但安全这块他们好像不让我说太多，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5842064,"end_ms":5878144,"text":"上面不让我说太多。但 anyway，现在就是很强，这是第一个能力。第二，像你说的逻 辑，“既然我很牛，每家公司都得依附我，用软件帮你做 7×24 小时防护”。我觉得 有点过。但按中国一般做事的方法，会有组织地做。另外，大家安全意识确实要增强 ，没辙。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5878544,"end_ms":5918544,"text":"模型能力就这么强，不像原来黑客攻击你，还要慢慢折腾几天，现在给点 token 就 跑，确实太强，这也没辙。——老师，您说 AI 迭代需要 automation，需要自己给自己 [原转写不清：“解决化的同学”]。我跟一些在 DeepSeek 的同学、学长交流，他们 说 AI 自己迭代、自己写算子，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5918624,"end_ms":5954304,"text":"能力越来越强，有些方面甚至超过人类程序员。他担忧我们在训练一个逐渐替代 我们的 AI，您怎么看？——这是现实。但人最怕的是认知上什么都不知道，不知道 明年、明天要干嘛，不知道未来发生什么。我觉得认知最重要。","speaker":"","sentence_id":null,"words":[]},{"start_ms":5954384,"end_ms":5994384,"text":"既然已经 on the way，在往前走，你说先 stop、不让做，也不是不可以，那全人类得 达成一致。但技术方向就是这个，不可避免。既然还有机会创造它……原来做智谱 之前，我留校那一年给自己定，到 45 岁就可以退休、没事干了。真觉得也许 45 岁就 是学术巅峰，不用干活了。然后，","speaker":"","sentence_id":null,"words":[]},{"start_ms":5994464,"end_ms":6034464,"text":"大模型一爆发，我叫它认知智能，2018 年我觉得模型一定会推理、有认知能力。后 来想，与其看着发生，不如跳进去，让它发生。今天一样，不做也会发生。你朋友在 DeepSeek，你不做，技术也在进步，所有东西在 AI 化。好多东西 AI 确实做得比你好 ，你不做也在发生，别人在那里，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6034544,"end_ms":6074544,"text":"还不如成为创造它的人，第一眼看到它发生。——最近几个月一直吵，所有 AI 龙 头厂商协商停下来，因为安全性太难保证，但有的不同意，各种吵，您怎么看？—— 全部停止，我觉得都是唬大家。你看刚说要 stop，过两天发 [模型名待核：原转写为 “office5.5”]，5.5 又断崖式领先。这明显就是，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6074624,"end_ms":6114624,"text":"“你们别做了”。我觉得技术会进步，而且他们比我们自动化得多，自我迭代快得 多。我们现在甚至还处于早期 supervised learning、semi-supervised learning，人进去动一下、它动一下；人家可能已在 self-supervised learning， 基本大部分自己折腾、优化。OpenAI 好几个人回来聊，好多时候每天任务都是进去 ，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6114704,"end_ms":6154704,"text":"早晨布置任务，[原转写不清：“大摩天无数 ag 级人跑去吧”]，晚上收工，都在干这 个。他们也担心，未来被替代怎么办？但 whatever，也只能这么做。所以到今天，我建 议第一，第一性原理，疯狂拥抱 AI，把每天能用的 token 拉满，能用多少用多少，未 来说不定没你的 token 可以用了，赶紧用。第二，赶紧把这些原理搞明白，自己上去 做。","speaker":"","sentence_id":null,"words":[]},{"start_ms":6154784,"end_ms":6168544,"text":"我觉得你们也可以做 new life [原词待核]，也可以创业，多做一些，对国家、社会贡 献更大。休息一下，休息五分钟，几点结束？","speaker":"","sentence_id":null,"words":[]},{"start_ms":6168976,"end_ms":6208976,"text":"刚才 Transformer 已经设定很多框架，要用什么 attention、什么模块，都搭起来 了。剩下就是在这个模块下怎么优化。机器学习最简单的优化，说白了，把参数调到 最优，本质就这么一句话。但早期 machine learning，比如有参数 theta，就把 theta 加上，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6209056,"end_ms":6249056,"text":"做迭代，把原来的 theta 加一个 eta、一个梯度，这是最标准的 machine learning 公式。你可能说，这么简单，都会，不需要管这些。大模型时代的 bug 就在这：优化器、 learning rate、batch size、step、超参数、训练稳定性，还有跟 GPU 相关的数值精 度，每个东西在“大”的过程中，都变成一个比较，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6249136,"end_ms":6278576,"text":"大的事。在 PC、服务器上，用 double 跑，这些可能都不是那么大的事。比如 learning rate，调低一点，总能收敛得还行，没那么敏感，实在不行再跑一遍。但大 了以后没这个时间，budget 有限，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6278656,"end_ms":6318656,"text":"budget 只有这么多。理解这个意思吗？原来小模型在一台服务器上，本来跑得快， 比如老板让发 paper，一小时能跑完，你写得烂，跑一天，估计老板也没说什么，差十 倍也无所谓。但现在，写个差十倍的程序，本来两个月训完，变成两年训完，两年后 地球都不见了，这就，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6318736,"end_ms":6358736,"text":"是毫无意义的研究。所以拆开看，所有事情都是在干这一件事：大了以后，每个小细 节应该怎么做，就是这个逻辑。还有，特别大了以后，刚才说 batch size。模型小时， 可以把所有样本遍历一遍，算一个梯度；大了不可能每次这么干，只能 sampling 一个小的出来。但 sample 多少？每个就变成一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6358816,"end_ms":6398816,"text":"可变的东西。原来的梯度公式，就这么简单一个公式展开。用泰勒展开，这其实是数 学的东西，如果放在计算机里，也是很传统的机器学习。一个标准函数的泰勒展开， 展开到二阶，有一阶项、二阶项，再写成矩阵形式，就这么简单。大家如果了解，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6398896,"end_ms":6448976,"text":"一眼就明白；不了解，可以上网查一元函数的二次泰勒展开。刚才有梯度，假设 delta theta 等于 eta G，公式就能写成这个式子。如果 first order、一阶展开，最 终得到左上式，这就是整个 loss function。优化 loss 时，一般加 subject to 一 个 constraint，大家可能知道，因为没有约束的优化一定是伪优化。比如说训模 型要 unlimited 算力，肯定是伪的，算力永远，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6449056,"end_ms":6499376,"text":"有 budget。所以做任何研究，有人说“我只有五张卡，能做什么”，也能做，你本身 就是 optimize something subject to 算力 budget。如果没有 budget，这一项就 负无穷大，这是标准优化式。现在在这个式子下做大模型优化，假如刚才约束项弄 成 Frobenius 范数，大家知道范数，还可以加二次，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6499456,"end_ms":6539456,"text":"项，甚至原来机器学习还有一次项，各种项、很多范数，它们分别给出不同优化器。 大模型最简单的优化器就是这么一个，往两边展开，有两个派系。第一是 Frobenius 这边，用柯西—施瓦茨不等式展开。刚才式子没法直接解，那你，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6539536,"end_ms":6579536,"text":"用柯西—施瓦茨不等式，得到右边的式子，是它的上界。再求解，得到 lower bound， 再代回去，最终得到最优解。大家稍微推导一下，因为是不等式，代进去，求 lower bound，求出解析式，再代入，得到最终 learning，这就是 SGD 的求解。通过这个式 子，在当时最简单的式子上，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6579616,"end_ms":6619216,"text":"最早 2011 年有一个专门用于 [网络类型待核：原转写为“同程网络”] 的 AdaGrad。它干什么？把历史梯度考虑进来。为什么？原来每次梯度跟历史无关，eta 人工确定。传统机器学习，我当时写的时候，会让它随循环次数往后小一点，人工定 ，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6619296,"end_ms":6665136,"text":"但每次梯度大小其实不知道，可能一开始定 0.1，循环往后到 0.01，完全人为设定。 现在可以考虑所有历史梯度，就这么简单，这是最早改进。后来第二个改进，把当前 梯度和历史积累值做一个求和，这是 RMSProp，稍微加了这么一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6665216,"end_ms":6685216,"text":"到今天也是广泛使用的技巧。但它没正式发表，整个 idea 是当时 Hinton 的 lecture，就一页纸，写了这一页，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6685375,"end_ms":6712336,"text":"后来被大家使用，对后面影响蛮大。早期 AdaGrad 只是累积上来，很简单，除数里加 一个累积项，把历史梯度加进来，做求和。这个后来被 Adam，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6712576,"end_ms":6752576,"text":"又改了一点。Adam 是 2015 年发表的文章，加了两项。在刚才基础上，又加一个 memory，对梯度的 memory，就这么一项。现在 Adam 已被广泛使用，本质就是加这个 idea、一个 memory，一个式子。比如 beta 设置越大，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6752656,"end_ms":6792656,"text":"memory 记得就越多，beta 特别小，记的就少，就是这个逻辑。后来还有对 Adam 的 bias correction、signal 分析等。最近另一个维度的改变，就是刚才泰勒展开只 有一阶，还可以展开二阶，二阶，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6792736,"end_ms":6832736,"text":"做传统机器学习的都知道，可以在一次项上做，也可在二阶上做。牛顿法一般在二 阶做得特别快，梯度下降更快。刚才是一次展开，也可以二次展开。分析以后，它是 一次项 diagonal 的设置，那么 Adam 可以看作在 diagonal form 里最快的梯度 下降。有些牛顿分析，大家可以看。最后，Adam，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6832816,"end_ms":6872816,"text":"里面又加 decay，也就是 weight decay。如果不加，就没考虑所有 weight decay 的影响。看 theta、eta、lambda，加上 theta_t，相当于加这一项，可以用它替代，做 decay，这是整个 AdamW 做的事情。另一条路就是 Muon，也是最近讨论最热的一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6872896,"end_ms":6912896,"text":"最近还有把 Muon、Adam 结合起来的优化器。我们最近招了一个从美国回来的，就 在做两个优化器的重整，把各自优点加在一起。Muon 是 2024 年发布，早期也只写 博客。在传统机器学习里，会认为改动太小，只加一项，不特别重要。但在大模型里， 这些研究每一个，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6912976,"end_ms":6952976,"text":"都可能被广泛使用。我刚才说广泛使用很重要，有同学问研究怎么做，只能一步步 做。真的做到最后，就可能被广泛使用。从小的开始，做 scaling、做实验，真的大规 模做，大规模都好使，就一定很多人用。如果只在小的上做一个 [原词待核：原转写 为“拖曳”]，最终没什么用。Anyway，Muon 作者最早发布它，利用正交，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6953056,"end_ms":6983376,"text":"能力把逻辑做出来，后来也加入 OpenAI。它完全通过博客，加上网上比赛，就像当 年卷积神经网络火起来，靠 AlexNet 打比赛第一。后来 Kimi 也发了《Muon is Scalable for Large Language Model Training》，本质上就是说，","speaker":"","sentence_id":null,"words":[]},{"start_ms":6983696,"end_ms":7024736,"text":"这个优化器在 large scale 上能做得非常好。当时 K2 训了一万亿参数，一下带火 了，而且非常稳定地训了十五万亿 token。最关键是训完没有爆、没有 loss 爆。它 的分解本质是矩阵形式，可以做 SVD 分解，把中间项删掉，这样就能，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7024816,"end_ms":7064816,"text":"变成分解式，再用近似方法求解。通过最速下降，在 spectrum，也就是谱范数下求 解，这些稍微快速跳过。可以看跟 AdamW 的对照，也可以看 QK-Clip 里面 rescale head 的逻辑。Muon 最大优点，我觉得是从早期 nanoGPT 里面，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7064896,"end_ms":7085616,"text":"出来，从小规模模型走到包括 Kimi 的万亿参数、发表出来。现在整个大模型、机器 学习还有问题，美国那边严格封锁，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7085696,"end_ms":7133296,"text":"包括 OpenAI、Anthropic、Google，现在都不发 paper。这对所有人都有挑战。在座 各位希望学到东西，我们也要进步，连 paper 都不发，是很大挑战，所以好多东西要 自己试。最后可以看到，在同一个模板、同一个公式下，theta 减去 beta G [公式符 号据原转写保留，需对照课件]，里面不同变化，就演化出不同优化器。到，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7133376,"end_ms":7173376,"text":"现在也没终结，不是说 AdamW 或哪个就最好。中间已有很多改变，现在 Adam、Muon 都很不错，后续还有很多改进，包括最近 Sophia、Shampoo 等，但还没到广泛、大规 模海量使用。这是优化器方面，第一个是优化器，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7173456,"end_ms":7185536,"text":"这么简单一个公式。第二讲 learning rate，听起来就是特别简单的过程，刚才公 式里那个 eta，但是，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7185616,"end_ms":7225616,"text":"bug 是什么？学习步长设得特别短，就一直走，却老走不到目标。原来机器学习没问 题，大不了训长一点；现在有 budget，只有两个月算力，训到这就停了，可能效果很 差。但不能设太长，太长风险更大，可能在这里爆掉，各种问题。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7225696,"end_ms":7255536,"text":"For whatever reason，所以也是个大坑。原来没人管，我们读研时，学习步长在机 器学习里是个很 tricky 的公式，程序可能随便写，一开始 0.1，或大一点，再慢慢降 ，写个根号、梯度分之 0.1 就完了。但现在变成一个函数、方式，在大模型里，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7255616,"end_ms":7283136,"text":"更多的坑是，一开始模型初始化，参数很糟，算梯度后，是不是应该先找一个大步长 ？听起来是这样，但一开始用 batch size，是从很多数据里随机 sample 一点来算，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7283296,"end_ms":7317136,"text":"噪音特别大，可能全是噪音，一个大步长就跑没了，又是个大坑。所以有 warmup。一 开始要 warmup，引出很多新东西。可以叫满步长，比如满步长是 1.0，但一开始不能 太大，还得小点，慢慢 warmup 起来，到 full、满了，再慢慢降，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7317216,"end_ms":7361456,"text":"就是这个逻辑。这里可以用 cosine decay，又是一个函数、方式。先温起来，再用 cosine，一开始走慢一点，后来进入平滑期。当然 cosine 也是大坑，参数设不对，比 如特别小，0.4，很快掉下来，迅速进入最低区间。假如走这条曲线，你看，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7361536,"end_ms":7376016,"text":"学习步长特别小，只有 0.1，学习很慢。右边这条曲线，如果学得慢，蓝色曲线始终到 不了，始终学不好。如果一开始，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7376096,"end_ms":7390336,"text":"设得特别大，或者它一直掉不下来，等算力没有时，还早，没到 early stop，就是黄 色线，可能更长。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7390976,"end_ms":7405776,"text":"可能更惨，还没学到。这又是另外一个问题。从研究角度，有人问怎么节省成本来算 ，因为不能每次都跑一遍，那成本更高。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7406176,"end_ms":7446176,"text":"每次跑实验，不能每个 T 都跑一种实验，成本太高。所以有 WSD， warmup-stable-decay。开始跑满，在不同情况下、不同步长下，分别做不同实验， 还可以回到这个 point，拿到一个很简单的状态，在 cosine 情况下也可以拿到。 这是学习步长给我们的启示，会带来很多不一样的结果。大家，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7446256,"end_ms":7486256,"text":"觉得“快”也难。第三是 batch size，刚才说也很重要。根据梯度公式，batch size 大小，对均值理论上是无偏的，因为 i.i.d.；但方差有变化，越大，方差越小 [据上下 文修正原转写“越大”]。batch size 越大，计算量越大，逻辑就这么简单。sample batch 时一定有 noise，这个 noise 跟 variance 有关。回头大家花点时间，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7486336,"end_ms":7526336,"text":"分析。如果 B 特别小，噪音就很大 [据上下文修正原转写“不大”]；特别大也不行， 这里有拐点，叫 critical batch、临界批量。本身也是一个 function。最终找到一 个 trigger，而且刚才讲过，B 跟学习步长又相关，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7526416,"end_ms":7566416,"text":"里面好多参数相关，大家回头看，这是 SGD 和 Adam 上的结果。eta 和 batch size 之间有关联：SGD 中，eta 基本和 batch size 成正比；Adam 中，eta 跟根号 B 成正比 。细节可以再看。还有，怎么训超大模型，在小模型上，叫，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7566496,"end_ms":7606496,"text":"hyperparameter transfer。小模型、很多分析和标准参数上适配出来，到大模型 到底对不对？这里有 scaling table，不是瞎搞，有一定依据。大家可以看这个表， input embedding、bias、hidden matrix 等每个都有。里面也有 μTransfer 概念， 用参数的 [原转写为“目标”，含义待核]，来，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7606576,"end_ms":7646576,"text":"在宽度缩小、小模型、不同 scale 下做实验，再做迁移。可以做不同 check，验证正确 性。验证几步，小模型上参数验证非常快，很快就跑出来，再往上 scale。有几个成功 案例，快速说：最早 BERT-Large，在很小的 [原转写为“T”，待核] 上做，再 scale 上来；GPT-3 的 6.7 [规模单位待核]，也是小规模 scale 上来，都是成功案例。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7646656,"end_ms":7678496,"text":"再结合上节课 scaling law，比如我们讲的 [原词待核：原转写为“templ”]，还有 DeepSeek、Step Law、Step，就是阶跃星辰等，上面都有一些验证，有兴趣可以看。快 速说另外一个重要的，training stability，本质就是训练过程中是否稳定，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7678736,"end_ms":7718736,"text":"出现炸掉的点，就基本没法用了。现在已有一些标准的炸掉原因，这么明显的反而 不算事，因为大概知道原因，已经发现了，改就行，前人总结过。对大模型，要加很多 log、日志，把所有东西 check 一下、全部记录下来，把刚才说的这些，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7718816,"end_ms":7744816,"text":"全记下来，标准逻辑就可以了。不标准的是数值精度，这是最糟糕的。大模型里面， 各种 FP32、TF32、BF16、FP16、FP8，还有 E4M3、E5M2，各种格式可能都存在，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7744896,"end_ms":7777456,"text":"训一个模型时，不同层、不同计算里都可能有各种精度数值，关键是何时选谁。你说 选高精度 FP32，可能整个计算量提高五六倍；不行，得选便宜的 FP8，那又可能在某 处爆了。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7777536,"end_ms":7817536,"text":"这个实验更糟糕，不像刚才 stability 有些标配，知道原因；它可能跑很久，跑完才 发现不对，这是最糟糕的。早期 H 卡，包括现在 B 卡，很多用 BF16 训，比较 stable。 但 B 卡出来以后，很多想用 FP8 训，FP8 又是个大坑。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7817616,"end_ms":7835536,"text":"英伟达给了大家很多空间，但 H100 出来大半年，很多人都没搞明白 FP8 怎么训，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7835616,"end_ms":7875616,"text":"怎么训好。B 卡出来到今天，也没几个人把 FP8 加 FP4 训好。早期说应该是用 FP8 加 FP4 训的，但我估计好多不一定，里面出了很多坑、bug。最近还有很多 below，不 同设计，大家网上可能看到 E4M3、[精度格式待核：原转写为“112 m1”] 等，接连到 不同的……大家知道，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7875696,"end_ms":7915696,"text":"这里不要浮点数据，全部表示其实就是八个比特。有些研究叫 precision-aware scaling，大概知道在哪些训练阶段，对不同 precision 做 scaling。当时 Kumar 他们用了几百次预训练，拟合一条曲线，来看不同情况。有一个很重要的结论，大家 现在可能，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7915776,"end_ms":7930176,"text":"模型 size 等也是 trade-off。比如训一万亿参数模型和两万亿参数模型，两万 亿一定比一万亿好吗？不一定。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7930736,"end_ms":7942416,"text":"如果两万亿用了 low precision，比如 FP8，也可能不如一万亿用 BF16 训。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7942576,"end_ms":7978736,"text":"相当于那边在用参数规模补精度。上节课 scaling 的核心是数据和 size matters。但今天讲的是训练每个小细节都有可能影响，包括精度。每层里激活函 数、求和，可以用 BF16、FP32、FP8，但每次都可能带来损失，因为总有损。","speaker":"","sentence_id":null,"words":[]},{"start_ms":7978816,"end_ms":7990016,"text":"比如要求和，把所有梯度加一起，有可能溢出。那是 FP32 溢出，还是 BF16、FP8 溢出？ 每个溢出，","speaker":"","sentence_id":null,"words":[]},{"start_ms":7990096,"end_ms":8012656,"text":"可能你觉得损失一点点不重要，但累加可能很重要，就这么点事。所以有时说 computer science 是 science 吗？好像没那么 science，一堆工程在里面。但它是 纯工程吗？刚才从泰勒展开一步步看，也有很严谨的数学证明。","speaker":"","sentence_id":null,"words":[]},{"start_ms":8012816,"end_ms":8052816,"text":"计算机就是这么一个学科。最后收尾：整个 scaling 也受数据限制，在数据受限情 况下怎么 scaling？最终数据本质变成 token，来得到收益。训练要到之前讲的 entropy floor，整个训练里要拿到每个 token 的收益，而且每个还有自己的，","speaker":"","sentence_id":null,"words":[]},{"start_ms":8052896,"end_ms":8092896,"text":"失效空间，以及实际空间中的表现 [原转写此处语义不清]。这就是 optimization 很重要的逻辑。今天本质讲两个：第一，大模型 Transformer 的 framework、 components，里面这几块 [原转写不清：“修罗的这几块反端”] 很重要。传统 Transformer 到今天变化很多，有些非常大，最近还有很多新东西。第二，做优化时 ，原来不是事、不是机器学习里，","speaker":"","sentence_id":null,"words":[]},{"start_ms":8092976,"end_ms":8107696,"text":"太重要的事，现在每个 component 都变成函数。原来只是个数值，定一个就完，比如 定 FP32；现在每个都是函数，要去 fit 它，","speaker":"","sentence_id":null,"words":[]},{"start_ms":8108416,"end_ms":8124816,"text":"让 AI 去 fit，让它学应该怎么做，变成一个 AI learning AI by itself 的时代。好， 今天大概讲到这里，谢谢，感谢大家！","speaker":"","sentence_id":null,"words":[]}]};window.AUDIO_URL="https://cloud.tsinghua.edu.cn/f/21d0de9da8b24e2db788/?dl=1";</script>
+  <script>
+    (() => {
+      "use strict";
+
+      const $ = (id) => document.getElementById(id);
+      const loading = $("loading");
+      const error = $("error");
+      const player = $("player");
+      const audio = $("audio");
+      const transcript = $("transcript");
+      const search = $("search");
+      const followButton = $("follow");
+      const count = $("result-count");
+      const empty = $("empty");
+      const clock = $("clock");
+      const durationLabel = $("duration");
+
+      const params = new URLSearchParams(window.location.search);
+      const key = params.get("key") || "";
+      const id = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).at(-1) || "");
+      const recordingPath = `/api/recordings/${encodeURIComponent(id)}`;
+      const query = `?key=${encodeURIComponent(key)}`;
+      const embeddedData = window.RECORDING_DATA;
+      const embeddedAudioUrl = window.AUDIO_URL;
+
+      let segments = [];
+      let rows = [];
+      let activeIndex = -1;
+      let activeWord = null;
+      let followPlayback = true;
+      let durationMs = 0;
+      let filteredCount = 0;
+
+      function formatTime(ms) {
+        const seconds = Math.max(0, Math.floor(Number(ms) / 1000 || 0));
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const remainder = seconds % 60;
+        return hours > 0
+          ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+          : `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+      }
+
+      function normalizedText(value) {
+        return String(value ?? "").normalize("NFKC").toLocaleLowerCase("zh-CN");
+      }
+
+      function showError(message) {
+        loading.hidden = true;
+        player.hidden = true;
+        error.hidden = false;
+        $("error-message").textContent = message;
+      }
+
+      function normalizeSegment(item) {
+        const start = Number(item.start_ms);
+        const end = Number(item.end_ms);
+        if (!Number.isFinite(start) || start < 0 || !Number.isFinite(end) || end < start) return null;
+        const words = Array.isArray(item.words)
+          ? item.words.map((word) => ({
+            start_ms: Number(word.start_ms),
+            end_ms: Number(word.end_ms),
+            text: String(word.text ?? "")
+          })).filter((word) => Number.isFinite(word.start_ms) && word.start_ms >= 0 && Number.isFinite(word.end_ms) && word.end_ms >= word.start_ms && word.text)
+          : [];
+        return {
+          start_ms: start,
+          end_ms: end,
+          text: String(item.text ?? ""),
+          speaker: item.speaker == null ? "" : String(item.speaker),
+          words
+        };
+      }
+
+      // Align timestamped words with the original sentence so punctuation and spaces remain intact.
+      function appendSentence(container, segment) {
+        const fragment = document.createDocumentFragment();
+        let cursor = 0;
+        for (const word of segment.words) {
+          const position = segment.text.indexOf(word.text, cursor);
+          if (position < 0) {
+            container.textContent = segment.text;
+            return;
+          }
+          fragment.append(document.createTextNode(segment.text.slice(cursor, position)));
+          const span = document.createElement("span");
+          span.className = "word";
+          span.dataset.wordStart = String(word.start_ms);
+          span.dataset.wordEnd = String(word.end_ms);
+          span.textContent = word.text;
+          fragment.append(span);
+          cursor = position + word.text.length;
+        }
+        fragment.append(document.createTextNode(segment.text.slice(cursor)));
+        container.append(fragment);
+      }
+
+      function renderTranscript() {
+        const fragment = document.createDocumentFragment();
+        rows = segments.map((segment, index) => {
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = "segment";
+          row.dataset.index = String(index);
+          row.setAttribute("aria-label", `${formatTime(segment.start_ms)} ${segment.speaker ? `${segment.speaker}：` : ""}${segment.text}`);
+
+          const time = document.createElement("time");
+          time.textContent = formatTime(segment.start_ms);
+          const body = document.createElement("span");
+          body.className = "segment-body";
+          if (segment.speaker) {
+            const speaker = document.createElement("span");
+            speaker.className = "speaker";
+            speaker.textContent = segment.speaker;
+            body.append(speaker);
+          }
+          const sentence = document.createElement("span");
+          if (segment.words.length) appendSentence(sentence, segment);
+          else sentence.textContent = segment.text;
+          body.append(sentence);
+          row.append(time, body);
+          fragment.append(row);
+          return row;
+        });
+        transcript.replaceChildren(fragment);
+        filterTranscript();
+      }
+
+      function filterTranscript() {
+        const term = normalizedText(search.value.trim());
+        filteredCount = 0;
+        rows.forEach((row, index) => {
+          const segment = segments[index];
+          const visible = !term || normalizedText(`${segment.speaker} ${segment.text}`).includes(term);
+          row.hidden = !visible;
+          if (visible) filteredCount += 1;
+        });
+        count.textContent = term ? `找到 ${filteredCount} 条 · 共 ${rows.length} 条` : `共 ${rows.length} 条`;
+        empty.hidden = filteredCount !== 0;
+        transcript.hidden = filteredCount === 0;
+      }
+
+      function indexAt(ms) {
+        let low = 0;
+        let high = segments.length - 1;
+        let candidate = -1;
+        while (low <= high) {
+          const middle = (low + high) >> 1;
+          if (segments[middle].start_ms <= ms) {
+            candidate = middle;
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        return candidate >= 0 && ms <= segments[candidate].end_ms ? candidate : -1;
+      }
+
+      function scrollToRow(row) {
+        if (!row || row.hidden) return;
+        const upper = row.offsetTop - transcript.offsetTop;
+        const lower = upper + row.offsetHeight;
+        const currentUpper = transcript.scrollTop;
+        const currentLower = currentUpper + transcript.clientHeight;
+        if (upper < currentUpper || lower > currentLower) {
+          transcript.scrollTo({ top: Math.max(0, upper - transcript.clientHeight * .35), behavior: "smooth" });
+        }
+      }
+
+      function updateCurrent() {
+        const ms = audio.currentTime * 1000;
+        clock.textContent = `${formatTime(ms)} / ${formatTime(durationMs)}`;
+        const index = indexAt(ms);
+        if (index !== activeIndex) {
+          if (activeIndex >= 0) {
+            rows[activeIndex].classList.remove("active");
+            rows[activeIndex].removeAttribute("aria-current");
+          }
+          activeIndex = index;
+          if (index >= 0) {
+            rows[index].classList.add("active");
+            rows[index].setAttribute("aria-current", "true");
+            if (followPlayback) scrollToRow(rows[index]);
+          }
+        }
+
+        if (activeWord) activeWord.classList.remove("word-active");
+        activeWord = null;
+        if (index >= 0) {
+          const words = rows[index].querySelectorAll("[data-word-start]");
+          for (const word of words) {
+            if (ms >= Number(word.dataset.wordStart) && ms <= Number(word.dataset.wordEnd)) {
+              activeWord = word;
+              word.classList.add("word-active");
+              break;
+            }
+          }
+        }
+      }
+
+      function seekTo(ms) {
+        const seconds = Math.max(0, ms / 1000);
+        audio.currentTime = seconds;
+        updateCurrent();
+        const playback = audio.play();
+        if (playback && typeof playback.catch === "function") playback.catch(() => {});
+      }
+
+      async function load() {
+        error.hidden = true;
+        player.hidden = true;
+        loading.hidden = false;
+        $("audio-error").hidden = true;
+        if ((!embeddedData || !embeddedAudioUrl) && (!id || !key)) {
+          showError("播放链接不完整。请从课程页面重新打开。");
+          return;
+        }
+        try {
+          let data = embeddedData;
+          if (!data) {
+            const response = await fetch(`${recordingPath}/public${query}`, { cache: "no-store" });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            data = await response.json();
+          }
+          if (!data || !Array.isArray(data.segments)) throw new Error("Invalid transcript");
+
+          segments = data.segments.map(normalizeSegment).filter(Boolean)
+            .sort((a, b) => a.start_ms - b.start_ms);
+          durationMs = Number(data.duration_ms) || 0;
+          if (!durationMs && segments.length) durationMs = segments.at(-1).end_ms;
+          $("title").textContent = String(data.title || "课堂录音");
+          document.title = `${$("title").textContent} · 逐字稿`;
+          durationLabel.textContent = durationMs ? `录音时长 ${formatTime(durationMs)}` : "点击逐字稿回听";
+          clock.textContent = `00:00 / ${formatTime(durationMs)}`;
+          audio.src = embeddedAudioUrl || `${recordingPath}/audio${query}`;
+          renderTranscript();
+          loading.hidden = true;
+          player.hidden = false;
+        } catch (_) {
+          showError("录音或逐字稿暂时无法加载。请检查链接是否有效，然后重试。");
+        }
+      }
+
+      transcript.addEventListener("click", (event) => {
+        const row = event.target.closest(".segment");
+        if (!row) return;
+        const segment = segments[Number(row.dataset.index)];
+        const word = event.target.closest("[data-word-start]");
+        seekTo(word ? Number(word.dataset.wordStart) : segment.start_ms);
+      });
+      search.addEventListener("input", filterTranscript);
+      search.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          search.value = "";
+          filterTranscript();
+        }
+      });
+      followButton.addEventListener("click", () => {
+        followPlayback = !followPlayback;
+        followButton.setAttribute("aria-pressed", String(followPlayback));
+        if (followPlayback && activeIndex >= 0) scrollToRow(rows[activeIndex]);
+      });
+      audio.addEventListener("timeupdate", updateCurrent);
+      audio.addEventListener("seeked", updateCurrent);
+      audio.addEventListener("loadedmetadata", () => {
+        if (!durationMs && Number.isFinite(audio.duration)) {
+          durationMs = Math.round(audio.duration * 1000);
+          durationLabel.textContent = `录音时长 ${formatTime(durationMs)}`;
+        }
+        updateCurrent();
+      });
+      audio.addEventListener("error", () => { $("audio-error").hidden = false; });
+      $("retry").addEventListener("click", load);
+      load();
+    })();
+  </script>
+</body>
+</html>
